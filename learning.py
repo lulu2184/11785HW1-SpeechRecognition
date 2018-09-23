@@ -9,21 +9,26 @@ from collections import namedtuple
 from torch.autograd import Variable
 import torch.nn.functional as F
 
+k = 5
+input_size = (2 * k + 1) * 40
+
 class SpeechModel(nn.Module):
     def __init__(self):
         super(SpeechModel, self).__init__()
-        self.fc1 = nn.Linear(120, 138 * 3)
-        self.fc2 = nn.Linear(138 * 3, 138)
+        self.fc1 = nn.Linear(input_size, 138 * 11)
+        self.fc2 = nn.Linear(138 * 11, 138)
+        # self.fc3 = nn.Linear(138 * 5, 138)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
+       	# x = F.relu(self.fc2(x))
         x = F.log_softmax(self.fc2(x))
         return x
 
 def inference(model, loader, n_members):
     correct = 0
     for data, label in loader:
-        X = Variable(data.view(-1, 120))
+        X = Variable(data.view(-1, input_size))
         Y = Variable(label)
         out = model(X)
         pred = out.data.max(1, keepdim=True)[1]
@@ -34,7 +39,7 @@ def inference(model, loader, n_members):
 def predict(model, loader):
 	result = np.array([])
 	for data, label in loader:
-		X = Variable(data.view(-1, 120))
+		X = Variable(data.view(-1, input_size))
 		Y = Variable(label)
 		out = model(X)
 		pred = out.data.max(1, keepdim=True)[1]
@@ -65,7 +70,7 @@ class Trainer():
             correct = 0
             for batch_idx, (data, label) in enumerate(train_loader):
                 self.optimizer.zero_grad()
-                X = Variable(data.view(-1, 120))
+                X = Variable(data.view(-1, input_size))
                 Y = Variable(label)
                 out = self.model(X)
                 pred = out.data.max(1, keepdim=True)[1]
@@ -74,8 +79,8 @@ class Trainer():
                 loss = F.nll_loss(out, Y)
                 loss.backward()
                 self.optimizer.step()
-                epoch_loss += loss.data[0]
-            total_loss = epoch_loss.numpy()/train_size
+                epoch_loss += loss.item()
+            total_loss = epoch_loss/train_size
             train_error = 1.0 - correct.numpy()/train_size
             val_error = 1.0 - inference(self.model, val_loader, val_size)
             print("============= epoch ", e + 1, "======================")
@@ -99,19 +104,12 @@ class SpeechDataSet(Dataset):
 
 def preprocess_x(samplex):
 	result = []
-	# print('shapes for samples')
-	# for i in range(samplex.shape[0]):
-	# 	print(i, '-th sample shape: ', samplex[i].shape)
 	for audio in samplex:
-		# print('audio shape: ', audio.shape)
-		for i in range(audio.shape[0]):
-			last = audio[i - 1] if i > 0 else np.zeros(40)
-			next = audio[i + 1] if i + 1 < audio.shape[0] else np.zeros(40)
-			# print('Preprocessing ' + str(i))
-			# print(last.shape)
-			# print(next.shape)
-			# print(audio[i].shape)
-			result.append(np.concatenate((last, audio[i], next)))
+		long_audio = np.concatenate((np.zeros((k, 40)), audio, np.zeros((k, 40))))
+		for i in range(k, long_audio.shape[0] - k):
+			last = np.concatenate(long_audio[i-k:i])
+			next = np.concatenate(long_audio[i + 1:i + k + 1])
+			result.append(np.concatenate((last, long_audio[i], next)))
 	return np.array(result)
 
 def preprocess(samplex, labely):
@@ -121,8 +119,6 @@ def preprocess(samplex, labely):
 		for label in audio:
 			sampley.append(label)
 	labely = np.array(sampley)
-	# print(samplex.shape)
-	# print(labely.shape)
 	p = np.random.permutation(samplex.shape[0])
 	return (samplex[p], labely[p])
 
