@@ -3,7 +3,7 @@ import os
 import torch
 import numpy as np
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, ConcatDataset
 import time
 from collections import namedtuple
 from torch.autograd import Variable
@@ -110,14 +110,24 @@ class SpeechDataSet(Dataset):
 	def __getitem__(self, index):
 		return self.data[index], self.labels[index]
 
+class AudioDataSet(Dataset):
+	def __init__(self, data, labels):
+		self.data = np.concatenate((np.zeros((k, 40)), data, np.zeros((k, 40))))
+		self.labels = labels
+
+	def __len__(self):
+		return self.labels.shape[0]
+
+	def __getitem__(self, index):
+		return torch.from_numpy(np.concatenate(self.data[index : index + k + k + 1])).float(), self.labels[index]
+
 def preprocess_x(samplex):
 	result = []
 	for audio in samplex:
 		long_audio = np.concatenate((np.zeros((k, 40)), audio, np.zeros((k, 40))))
 		for i in range(k, long_audio.shape[0] - k):
-			last = np.concatenate(long_audio[i-k:i])
-			next = np.concatenate(long_audio[i + 1:i + k + 1])
-			result.append(np.concatenate((last, long_audio[i], next)))
+			feature = np.concatenate(long_audio[i-k:i + k + 1])
+			result.append(feature)
 	return np.array(result)
 
 def preprocess(samplex, labely):
@@ -142,16 +152,16 @@ testx, _ = loader.test
 
 # Preprocessing
 print('Proprocessing....')
-trainx, trainy = preprocess(trainx, trainy)
-valx, valy = preprocess(valx, valy)
-testx = preprocess_x(testx)
+# trainx, trainy = preprocess(trainx, trainy)
+# valx, valy = preprocess(valx, valy)
+# testx = preprocess_x(testx)
 
 # Transform to torch array
-trainx = torch.from_numpy(trainx).float()
-valx = torch.from_numpy(valx).float()
-trainy = torch.from_numpy(trainy).long()
-valy = torch.from_numpy(valy).long()
-testx = torch.from_numpy(testx).float()
+# trainx = torch.from_numpy(trainx).float()
+# valx = torch.from_numpy(valx).float()
+# trainy = torch.from_numpy(trainy).long()
+# valy = torch.from_numpy(valy).long()
+# testx = torch.from_numpy(testx).float()
 
 train_size = trainx.shape[0]
 val_size = valx.shape[0]
@@ -159,14 +169,22 @@ val_size = valx.shape[0]
 # Create DataLoader
 print('Creating DataLoader....')
 batch_size = 100
-train_data =  SpeechDataSet(trainx, trainy)
-val_data = SpeechDataSet(valx, valy)
-test_data = SpeechDataSet(testx, np.zeros(testx.shape[0]))
+# train_data =  SpeechDataSet(trainx[:10], trainy[:10])
+# val_data = SpeechDataSet(valx[:10], valy[:10])
+# test_data = SpeechDataSet(testx, np.zeros(testx.shape[0]))
+
+trainx, trainy = trainx, trainy
+valx, valy = valx, valy
+testx = testx
+
+train_data = ConcatDataset([AudioDataSet(sample, labels) for sample, labels in zip(trainx, trainy)])
+val_data = ConcatDataset([AudioDataSet(sample, labels) for sample, labels in zip(valx, valy)])
+test_data = ConcatDataset([AudioDataSet(sample, np.zeros(sample.shape[0])) for sample in testx])
 
 train_loader = DataLoader(train_data, batch_size=batch_size,
-	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, trainx.shape[0])))
+	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, len(train_data))))
 val_loader = DataLoader(val_data, batch_size=batch_size,
-	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, valx.shape[0])))
+	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, len(val_data))))
 test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
 #Create model
