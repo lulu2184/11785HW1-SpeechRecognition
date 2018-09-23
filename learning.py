@@ -9,49 +9,61 @@ from collections import namedtuple
 from torch.autograd import Variable
 import torch.nn.functional as F
 
-k = 5
+k = 7
 input_size = (2 * k + 1) * 40
+GPU = True
 
 class SpeechModel(nn.Module):
     def __init__(self):
         super(SpeechModel, self).__init__()
-        self.fc1 = nn.Linear(input_size, 2048)
-        self.fc2 = nn.Linear(2048, 2048)
-        self.fc3 = nn.Linear(2048, 1024)
-        self.fc4 = nn.Linear(1024, 1024)
-        self.fc5 = nn.Linear(1024, 1024)
-        self.fc6 = nn.Linear(1024, 512)
-        self.fc7 = nn.Linear(512, 138)
+        hiddens = [2048, 2048, 1024, 1024, 1024, 512, 138]
+        self.fc1 = nn.Linear(input_size, hiddens[0])
+        self.fc2 = nn.Linear(hiddens[0], hiddens[1])
+        self.fc3 = nn.Linear(hiddens[1], hiddens[2])
+        self.fc4 = nn.Linear(hiddens[2], hiddens[3])
+        self.fc5 = nn.Linear(hiddens[3], hiddens[4])
+        self.fc6 = nn.Linear(hiddens[4], hiddens[5])
+        self.fc7 = nn.Linear(hiddens[5], hiddens[6])
+
+        self.bnorm1 = nn.BatchNorm1d(hiddens[0])
+        self.bnorm2 = nn.BatchNorm1d(hiddens[1])
+        self.bnorm3 = nn.BatchNorm1d(hiddens[2])
+        self.bnorm4 = nn.BatchNorm1d(hiddens[3])
+        self.bnorm5 = nn.BatchNorm1d(hiddens[4])
+        self.bnorm6 = nn.BatchNorm1d(hiddens[5])
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-       	x = F.relu(self.fc2(x))
-       	x = F.relu(self.fc3(x))
-       	x = F.relu(self.fc4(x))
-       	x = F.relu(self.fc5(x))
-       	x = F.relu(self.fc6(x))
-        x = F.log_softmax(self.fc7(x))
-        return x
+    	x = F.relu(self.bnorm1(self.fc1(x)))
+    	x = F.relu(self.bnorm2(self.fc2(x)))
+    	x = F.relu(self.bnorm3(self.fc3(x)))
+    	x = F.relu(self.bnorm4(self.fc4(x)))
+    	x = F.relu(self.bnorm5(self.fc5(x)))
+    	x = F.relu(self.bnorm6(self.fc6(x)))
+    	x = F.log_softmax(self.fc7(x))
+    	return x
 
 def inference(model, loader, n_members):
     correct = 0
     for data, label in loader:
         X = Variable(data.view(-1, input_size))
         Y = Variable(label)
+        if GPU:
+        	X, Y = X.cuda(), Y.cuda()
         out = model(X)
         pred = out.data.max(1, keepdim=True)[1]
         predicted = pred.eq(Y.data.view_as(pred))
         correct += predicted.sum()
-    return correct.numpy() / n_members
+    return correct.cpu().numpy() / n_members
 
 def predict(model, loader):
 	result = np.array([])
 	for data, label in loader:
 		X = Variable(data.view(-1, input_size))
 		Y = Variable(label)
+		if GPU: X, Y = X.cuda(), Y.cuda()
 		out = model(X)
 		pred = out.data.max(1, keepdim=True)[1]
-		result = np.concatenate((result, pred.numpy().reshape(-1,)))
+		result = np.concatenate((result, pred.cpu().numpy().reshape(-1,)))
 	return result
 
 
@@ -62,10 +74,12 @@ class Trainer():
     """
 
     def __init__(self, model, optimizer, load_path=None):
-        self.model = model
-        if load_path is not None:
-            self.model = torch.load(load_path)
-        self.optimizer = optimizer
+    	self.model = model
+    	if load_path is not None:
+    		self.model = torch.load(load_path)
+    		if GPU:
+    			self.model = self.model.cuda()
+    	self.optimizer = optimizer
 
     def save_model(self, path):
         torch.save(self.model.state_dict(), path)
@@ -73,13 +87,18 @@ class Trainer():
     def run(self, epochs):
         print("Start Training...")
         self.metrics = []
+        num_batch = len(train_loader)
         for e in range(n_epochs):
             epoch_loss = 0
             correct = 0
             for batch_idx, (data, label) in enumerate(train_loader):
                 self.optimizer.zero_grad()
-                X = Variable(data.view(-1, input_size))
-                Y = Variable(label)
+                if GPU:
+	                X = Variable(data.view(-1, input_size)).cuda()
+	                Y = Variable(label).cuda()
+                else:
+	                X = Variable(data.view(-1, input_size))
+	                Y = Variable(label)
                 out = self.model(X)
                 pred = out.data.max(1, keepdim=True)[1]
                 predicted = pred.eq(Y.data.view_as(pred))
@@ -88,8 +107,9 @@ class Trainer():
                 loss.backward()
                 self.optimizer.step()
                 epoch_loss += loss.item()
+                print("[epoch {0}] {1}/{2} loss: {3:.4f}".format(e + 1, batch_idx + 1, num_batch, loss.item()))
             total_loss = epoch_loss/train_size
-            train_error = 1.0 - correct.numpy()/train_size
+            train_error = 1.0 - correct.cpu().numpy()/train_size
             val_error = 1.0 - inference(self.model, val_loader, val_size)
             print("============= epoch ", e + 1, "======================")
             print("total loss: {0:.8f}".format(total_loss))
@@ -151,7 +171,7 @@ valx, valy = loader.dev
 testx, _ = loader.test
 
 # Preprocessing
-print('Proprocessing....')
+# print('Proprocessing....')
 # trainx, trainy = preprocess(trainx, trainy)
 # valx, valy = preprocess(valx, valy)
 # testx = preprocess_x(testx)
@@ -163,45 +183,51 @@ print('Proprocessing....')
 # valy = torch.from_numpy(valy).long()
 # testx = torch.from_numpy(testx).float()
 
-train_size = trainx.shape[0]
-val_size = valx.shape[0]
-
 # Create DataLoader
 print('Creating DataLoader....')
-batch_size = 100
+batch_size = 20000
 # train_data =  SpeechDataSet(trainx[:10], trainy[:10])
 # val_data = SpeechDataSet(valx[:10], valy[:10])
 # test_data = SpeechDataSet(testx, np.zeros(testx.shape[0]))
 
-trainx, trainy = trainx, trainy
-valx, valy = valx, valy
-testx = testx
+if not GPU:
+	trainx, trainy = trainx[:10], trainy[:10]
+	valx, valy = valx[:10], valy[:10]
+	testx = testx[:10]
 
 train_data = ConcatDataset([AudioDataSet(sample, labels) for sample, labels in zip(trainx, trainy)])
 val_data = ConcatDataset([AudioDataSet(sample, labels) for sample, labels in zip(valx, valy)])
 test_data = ConcatDataset([AudioDataSet(sample, np.zeros(sample.shape[0])) for sample in testx])
 
-train_loader = DataLoader(train_data, batch_size=batch_size,
-	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, len(train_data))))
-val_loader = DataLoader(val_data, batch_size=batch_size,
-	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, len(val_data))))
-test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+train_size = len(train_data)
+val_size = len(val_data)
+
+train_loader = DataLoader(train_data, batch_size=batch_size, num_workers=4,
+	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, train_size)))
+val_loader = DataLoader(val_data, batch_size=batch_size, num_workers=4,
+	sampler=torch.utils.data.sampler.SubsetRandomSampler(np.arange(0, val_size)))
+test_loader = DataLoader(test_data, batch_size=batch_size, num_workers=4, shuffle=False)
 
 #Create model
 print('Creating model....')
-def init_randn(m):
+def init_xavier(m):
     if type(m) == nn.Linear:
-        m.weight.data.normal_(0,1)
+        fan_in = m.weight.size()[1]
+        fan_out = m.weight.size()[0]
+        std = np.sqrt(2.0 / (fan_in + fan_out))
+        m.weight.data.normal_(0,std)
 model = SpeechModel()
-model.apply(init_randn)
+model.apply(init_xavier)
+if GPU:
+	model = model.cuda()
 
 # Training
 print('Training....')
 n_epochs = 8
-optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-sgd_trainer = Trainer(model, optimizer)
-sgd_trainer.run(n_epochs)
-sgd_trainer.save_model('./sgd_model.pt')
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+trainer = Trainer(model, optimizer)
+trainer.run(n_epochs)
+trainer.save_model('./sgd_model.pt')
 
 # Predict
 print('Predicting....')
