@@ -1,0 +1,1 @@
+first version: [epoch 1] val error: 0.69458863

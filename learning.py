@@ -15,14 +15,22 @@ input_size = (2 * k + 1) * 40
 class SpeechModel(nn.Module):
     def __init__(self):
         super(SpeechModel, self).__init__()
-        self.fc1 = nn.Linear(input_size, 138 * 11)
-        self.fc2 = nn.Linear(138 * 11, 138)
-        # self.fc3 = nn.Linear(138 * 5, 138)
+        self.fc1 = nn.Linear(input_size, 2048)
+        self.fc2 = nn.Linear(2048, 2048)
+        self.fc3 = nn.Linear(2048, 1024)
+        self.fc4 = nn.Linear(1024, 1024)
+        self.fc5 = nn.Linear(1024, 1024)
+        self.fc6 = nn.Linear(1024, 512)
+        self.fc7 = nn.Linear(512, 138)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
-       	# x = F.relu(self.fc2(x))
-        x = F.log_softmax(self.fc2(x))
+       	x = F.relu(self.fc2(x))
+       	x = F.relu(self.fc3(x))
+       	x = F.relu(self.fc4(x))
+       	x = F.relu(self.fc5(x))
+       	x = F.relu(self.fc6(x))
+        x = F.log_softmax(self.fc7(x))
         return x
 
 def inference(model, loader, n_members):
@@ -172,8 +180,8 @@ model.apply(init_randn)
 # Training
 print('Training....')
 n_epochs = 8
-SGDOptimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-sgd_trainer = Trainer(model, SGDOptimizer)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+sgd_trainer = Trainer(model, optimizer)
 sgd_trainer.run(n_epochs)
 sgd_trainer.save_model('./sgd_model.pt')
 
